@@ -21,6 +21,16 @@ const nodeEnvSchema = z.object({
 	AUTH_ALLOWED_EMAILS: z.string().trim().min(1, "AUTH_ALLOWED_EMAILS is required"),
 	SYNC_TOKEN_SECRET: z.string().trim().min(1, "SYNC_TOKEN_SECRET is required"),
 	SYNC_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().optional(),
+	// Single request header carrying the client IP, set by a fronting proxy that
+	// overwrites any client-supplied copy (e.g. Railway's `x-real-ip`). Only set
+	// this when clients cannot reach the server except through that proxy.
+	CLIENT_IP_HEADER: optionalNonBlankString.pipe(
+		z
+			.string()
+			.regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/, "CLIENT_IP_HEADER must be a single HTTP header name")
+			.transform((value) => value.toLowerCase())
+			.optional(),
+	),
 	BLOB_STORAGE: z.preprocess(
 		(value) => (typeof value === "string" ? value.toLowerCase() : value),
 		z.enum(["disk", "s3"]).default("disk"),
@@ -59,6 +69,7 @@ export type NodeServerConfig = {
 	githubClientSecret?: string;
 	syncTokenSecret: string;
 	syncTokenTtlSeconds?: number;
+	clientIpHeader?: string;
 	blob: NodeBlobConfig;
 };
 
@@ -86,6 +97,7 @@ export function parseNodeServerConfig(
 		githubClientSecret: env.GITHUB_CLIENT_SECRET,
 		syncTokenSecret: env.SYNC_TOKEN_SECRET,
 		syncTokenTtlSeconds: env.SYNC_TOKEN_TTL_SECONDS,
+		clientIpHeader: env.CLIENT_IP_HEADER,
 		blob: parseBlobConfig(env),
 	};
 }

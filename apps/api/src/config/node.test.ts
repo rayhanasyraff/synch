@@ -50,6 +50,25 @@ describe("Node server config", () => {
 		});
 	});
 
+	it("leaves the client IP header unset unless configured", () => {
+		expect(parseNodeServerConfig(requiredEnv).clientIpHeader).toBeUndefined();
+		for (const value of ["", "   "]) {
+			expect(parseNodeServerConfig({ ...requiredEnv, CLIENT_IP_HEADER: value }).clientIpHeader)
+				.toBeUndefined();
+		}
+	});
+
+	it("normalizes a configured client IP header name", () => {
+		expect(parseNodeServerConfig({ ...requiredEnv, CLIENT_IP_HEADER: " X-Real-IP " }).clientIpHeader)
+			.toBe("x-real-ip");
+	});
+
+	it("rejects anything other than a single header name for the client IP", () => {
+		for (const value of ["x-real-ip,x-forwarded-for", "x real ip", "x-real-ip:", "x-réal-ip"]) {
+			expect(() => parseNodeServerConfig({ ...requiredEnv, CLIENT_IP_HEADER: value })).toThrow();
+		}
+	});
+
 	it("rejects invalid ports and incomplete S3 settings before startup", () => {
 		expect(() => parseNodeServerConfig({ ...requiredEnv, PORT: "70000" })).toThrow();
 		expect(() =>
