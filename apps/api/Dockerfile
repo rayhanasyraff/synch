@@ -48,7 +48,6 @@ COPY --from=builder /app/apps/api/dist /app/apps/api/dist
 WORKDIR /app/apps/api
 
 EXPOSE 8787
-VOLUME /data
 ENV DATA_DIR=/data
 
 CMD ["node", "dist/server.mjs"]
