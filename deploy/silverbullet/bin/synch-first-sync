@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# Interactive procedure (run inside the container via `railway ssh` while the
+# service is in maintenance mode) that connects the notes folder to the
+# EXISTING remote vault named by SYNCH_VAULT_ID and syncs it.
+#
+# It handles three situations, all decided by the read-only preflight:
+#  - first connection: the folder must be empty, so the sync only downloads;
+#  - resuming an interrupted first sync, or reconnecting a folder whose vault
+#    key was removed (`synch logout`): the folder must match its sync store
+#    exactly (nothing missing, nothing unknown), so the sync can neither
+#    delete nor overwrite remote notes;
+#  - anything else (other vault, unreadable state): refuse and change nothing.
+# It never creates a vault, and the vault ID must already be visible to the account.
+set -Eeuo pipefail
+
+log() { printf '%s\n' "$*" >&2; }
+fatal() {
+	log "ERROR: $*"
+	exit 1
+}
+
+: "${SB_FOLDER:?SB_FOLDER is not set}"
+: "${SYNCH_VAULT_ID:?SYNCH_VAULT_ID is not set}"
+: "${SYNCH_API_URL:?SYNCH_API_URL is not set}"
+NOTES_HOME="${NOTES_HOME:-/opt/notes}"
+# This script applies its own checks, then runs `vault connect` and `sync`,
+# which the operator-facing `synch` guard refuses; so it calls the CLI directly.
+SYNCH_BIN="${SYNCH_BIN:-$NOTES_HOME/lib/synch-unguarded}"
+LIST_VAULTS_BIN="${LIST_VAULTS_BIN:-synch-list-vaults}"
+RESET_HINT="To start over, delete EVERYTHING in $SB_FOLDER including .synch (the remote vault is not affected), then rerun synch-first-sync."
+
+preflight_json() {
+	node "$NOTES_HOME/lib/preflight.mjs" --json || true
+}
+# Prints one field of the preflight JSON; nested fields use dots (counts.missing).
+json_field() {
+	node -e '
+		let value = JSON.parse(require("fs").readFileSync(0, "utf8"));
+		for (const key of process.argv[1].split(".")) value = value?.[key];
+		process.stdout.write(Array.isArray(value) ? value.join("\n") : String(value ?? ""));
+	' "$1"
+}
+
+state="$(preflight_json)"
+reason="$(json_field reason <<<"$state")"
+message="$(json_field message <<<"$state")"
+case "$reason" in
+ready)
+	log "Already connected and synced: $message"
+	log "Unset NOTES_MAINTENANCE (if set) and restart the service from Railway."
+	exit 0
+	;;
+no_credentials | folder_not_connected | no_sync_store | sync_store_unbound)
+	mode="first"
+	;;
+first_sync_incomplete | reconnect_required)
+	mode="resume"
+	;;
+*) fatal "Refusing to continue ($reason): $message" ;;
+esac
+
+if [[ -e "$SB_FOLDER/.synch/cli.lock" ]]; then
+	fatal "A synch process holds $SB_FOLDER/.synch/cli.lock. Put the service in maintenance mode (NOTES_MAINTENANCE=1) first."
+fi
+
+if [[ "$mode" == "first" ]]; then
+	if [[ -n "$(find "$SB_FOLDER" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+		fatal "$SB_FOLDER is not empty, so a first sync could upload its files over remote notes. Move its contents (including any .synch folder) out first."
+	fi
+else
+	missing="$(json_field counts.missing <<<"$state")"
+	untracked="$(json_field counts.untracked <<<"$state")"
+	if [[ "$missing" != "0" || "$untracked" != "0" ]]; then
+		log "The folder no longer matches its sync store (missing: $missing, unknown: $untracked)."
+		log "Syncing now would delete missing notes from the remote vault or upload unknown files over it. Examples:"
+		json_field samples.missing <<<"$state" | sed 's/^/  missing: /' >&2
+		json_field samples.untracked <<<"$state" | sed 's/^/  unknown: /' >&2
+		fatal "$RESET_HINT"
+	fi
+fi
+
+log "Step 1/4: sign in to $SYNCH_API_URL (device code; approve it in a browser where you are signed in)."
+"$SYNCH_BIN" login || fatal "Sign-in did not complete. Nothing else was changed."
+
+log "Step 2/4: confirm the target vault exists. Vaults visible to this account:"
+listing="$("$LIST_VAULTS_BIN")" || fatal "Could not list vaults. Nothing else was changed."
+printf '%s\n' "$listing"
+if ! awk -v id="$SYNCH_VAULT_ID" '$1 == id && /<- SYNCH_VAULT_ID$/ { found = 1 } END { exit !found }' <<<"$listing"; then
+	fatal "SYNCH_VAULT_ID ($SYNCH_VAULT_ID) is not one of this account's vaults. Nothing else was changed."
+fi
+read -r -p "Type the vault ID again to confirm connecting $SB_FOLDER to it: " confirmation
+[[ "$confirmation" == "$SYNCH_VAULT_ID" ]] || fatal "Confirmation did not match. Nothing else was changed."
+
+if [[ "$reason" == "no_credentials" || "$reason" == "folder_not_connected" || "$reason" == "reconnect_required" ]]; then
+	log "Step 3/4: unlock the vault (you will be asked for the vault password)."
+	"$SYNCH_BIN" vault connect --vault "$SB_FOLDER" --vault-id "$SYNCH_VAULT_ID" ||
+		fatal "Connecting failed (wrong password or no access?). Rerun synch-first-sync to try again."
+else
+	log "Step 3/4: folder already connected to this vault; skipping vault connect."
+fi
+
+if [[ "$mode" == "first" ]]; then
+	log "Step 4/4: first sync (downloads into the empty folder)."
+else
+	log "Step 4/4: sync (the folder matches its sync store, so nothing is deleted or overwritten)."
+fi
+"$SYNCH_BIN" sync --vault "$SB_FOLDER" ||
+	fatal "The sync did not complete. Rerun synch-first-sync; it resumes safely."
+
+state="$(preflight_json)"
+final_reason="$(json_field reason <<<"$state")"
+if [[ "$final_reason" != "ready" ]]; then
+	# A brand-new remote vault with no content or history leaves the sync cursor
+	# at 0, which this service cannot tell apart from a sync that never ran, so
+	# it stays "first_sync_incomplete". Report that accurately instead of a
+	# generic failure. A vault that has ever held a note does not hit this.
+	known="$(json_field counts.known <<<"$state")"
+	if [[ "$final_reason" == "first_sync_incomplete" && "$known" == "0" ]] &&
+		[[ -z "$(find "$SB_FOLDER" -type f -not -path "$SB_FOLDER/.*" -print -quit)" ]]; then
+		fatal "The sync succeeded, but the remote vault has no content yet. This service cannot confirm a first sync of an empty vault (it cannot distinguish one from an unsynced folder). Add at least one note to the vault from Obsidian, then rerun synch-first-sync."
+	fi
+	fatal "Preflight is not ready after the sync: $(json_field message <<<"$state")"
+fi
+file_count="$(find "$SB_FOLDER" -type f -not -path "$SB_FOLDER/.*" | wc -l)"
+log "Done: $(json_field message <<<"$state") Files in folder: ${file_count}."
+log "Compare that with your vault in Obsidian, then unset NOTES_MAINTENANCE (if set) and restart the service from Railway."

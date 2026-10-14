@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Guarded `synch` command for this deployment (installed as /usr/local/bin/synch).
+#
+# It prevents ACCIDENTAL use of commands that can lose data here:
+#  - `pull` is refused: it replaces local files that differ from the remote,
+#    discarding unsynced SilverBullet edits;
+#  - `vault connect` is refused: use `synch-first-sync`, which verifies the
+#    vault ID and the folder first;
+#  - `sync` and `watch` only run for the managed notes folder ($SB_FOLDER),
+#    and only when the startup preflight reports it ready (connected to
+#    SYNCH_VAULT_ID, first sync complete, no mass deletion pending);
+#  - everything else (login, logout, status, help, version) passes through.
+#
+# It is not a security boundary: running the CLI another way (for example
+# /opt/notes/lib/synch-unguarded or `node /opt/synch/synch.js`) bypasses it.
+set -euo pipefail
+
+NOTES_HOME="${NOTES_HOME:-/opt/notes}"
+SYNCH_UNGUARDED="${SYNCH_UNGUARDED:-$NOTES_HOME/lib/synch-unguarded}"
+
+refuse() {
+	printf 'synch (guarded): %s\n' "$*" >&2
+	exit 2
+}
+
+# Mirror the CLI's argument handling (apps/cli/src/main.ts): value options,
+# boolean flags, then positionals for the command.
+positionals=()
+vault_path=""
+passthrough=0
+args=("$@")
+i=0
+while ((i < ${#args[@]})); do
+	arg="${args[i]}"
+	case "$arg" in
+	--vault | --vault-id | --api-url)
+		[[ "$arg" == "--vault" ]] && vault_path="${args[i + 1]:-}"
+		i=$((i + 2))
+		continue
+		;;
+	--vault=*) vault_path="${arg#--vault=}" ;;
+	--vault-id=* | --api-url=*) ;;
+	-h | --help | -v | --version) passthrough=1 ;;
+	-*) ;; # unknown options: the CLI reports them as usage errors
+	*) positionals+=("$arg") ;;
+	esac
+	i=$((i + 1))
+done
+
+command="${positionals[0]:-}"
+if ((passthrough)) || [[ -z "$command" ]]; then
+	exec "$SYNCH_UNGUARDED" "$@"
+fi
+
+case "$command" in
+pull)
+	refuse "'synch pull' is disabled in this deployment. It replaces local files that differ from the remote" \
+		"and discards unsynced SilverBullet edits. Restart the service instead; 'synch watch' pulls safely."
+	;;
+vault)
+	if [[ "${positionals[1]:-}" == "connect" ]]; then
+		refuse "use 'synch-first-sync' to connect this folder; it verifies the vault ID and the folder first."
+	fi
+	;;
+sync | watch)
+	: "${SB_FOLDER:?SB_FOLDER is not set}"
+	target="$(realpath -m -- "${vault_path:-$PWD}")"
+	managed="$(realpath -m -- "$SB_FOLDER")"
+	if [[ "$target" != "$managed" ]]; then
+		refuse "'synch $command' only runs for the managed notes folder $managed (pass --vault $managed)."
+	fi
+	set +e
+	verdict="$(node "$NOTES_HOME/lib/preflight.mjs" 2>&1)"
+	status=$?
+	set -e
+	if ((status != 0)); then
+		printf '%s\n' "$verdict" >&2
+		refuse "'synch $command' refused: the preflight is not ready (see above). Use synch-first-sync," \
+			"or fix the reported problem and restart the service."
+	fi
+	;;
+esac
+
+exec "$SYNCH_UNGUARDED" "$@"

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Runs the Synch CLI WITHOUT the deployment's guard (bin/synch). Only
+# entrypoint.sh and bin/synch-first-sync use it, after applying their own
+# checks. Not on PATH; operators should use `synch` or `synch-first-sync`.
+set -euo pipefail
+exec "${NOTES_HOME:-/opt/notes}/lib/as-synch" node "${SYNCH_CLI_JS:-/opt/synch/synch.js}" "$@"

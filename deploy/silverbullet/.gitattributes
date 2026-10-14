@@ -1,0 +1,8 @@
+# Scripts run inside a Linux container; CRLF would break their shebangs.
+*.sh text eol=lf
+*.mjs text eol=lf
+bin/* text eol=lf
+lib/as-synch text eol=lf
+lib/synch-unguarded text eol=lf
+test/symlink-regression.sh text eol=lf
+Dockerfile text eol=lf

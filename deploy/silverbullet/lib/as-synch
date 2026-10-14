@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Runs a command as the `synch` user when invoked as root (for example from a
+# `railway ssh` shell), so the CLI never creates root-owned files on the
+# volume and the vault key stays readable only by `synch`. As any other user
+# it runs the command unchanged.
+set -euo pipefail
+
+if [[ "$(id -u)" -ne 0 ]]; then
+	exec "$@"
+fi
+
+# Group-shared notes (0770 directories, 0660 files); nothing for "other".
+umask 0007
+exec setpriv --reuid=synch --regid=synch --init-groups --no-new-privs \
+	env -u SB_USER -u SB_AUTH_TOKEN HOME=/home/synch "$@"

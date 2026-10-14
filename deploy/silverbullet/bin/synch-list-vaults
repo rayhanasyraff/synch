@@ -1,0 +1,56 @@
+#!/usr/bin/env node
+// Lists the remote vaults visible to the signed-in Synch CLI account
+// (GET /v1/vaults). Prints only IDs, names, and creation dates; never the
+// session token. Used to confirm SYNCH_VAULT_ID before connecting.
+
+import fs from "node:fs";
+import path from "node:path";
+
+const configHome = process.env.XDG_CONFIG_HOME || path.join(process.env.HOME ?? "", ".config");
+const credentialsPath = path.join(configHome, "synch", "credentials.json");
+
+let credentials;
+try {
+	credentials = JSON.parse(fs.readFileSync(credentialsPath, "utf8"));
+} catch {
+	fail("Not signed in. Run `synch login` first.");
+}
+const token = credentials?.sessionToken;
+if (!token) {
+	fail("Not signed in. Run `synch login` first.");
+}
+
+const apiBaseUrl = (process.env.SYNCH_API_URL || credentials.apiBaseUrl || "").replace(/\/+$/, "");
+if (!apiBaseUrl) {
+	fail("SYNCH_API_URL is not set.");
+}
+// Same rule as the CLI: a token saved for one server is never sent to another.
+if (credentials.apiBaseUrl && credentials.apiBaseUrl.replace(/\/+$/, "") !== apiBaseUrl) {
+	fail("The saved login belongs to a different API URL. Run `synch login` again.");
+}
+
+const response = await fetch(`${apiBaseUrl}/v1/vaults`, {
+	headers: { authorization: `Bearer ${token}` },
+});
+if (response.status === 401) {
+	fail("The saved session was rejected. Run `synch login` again.");
+}
+if (!response.ok) {
+	fail(`Listing vaults failed with HTTP ${response.status}.`);
+}
+
+const { vaults } = await response.json();
+if (!Array.isArray(vaults) || vaults.length === 0) {
+	process.stdout.write("No remote vaults are visible to this account.\n");
+} else {
+	const expected = process.env.SYNCH_VAULT_ID?.trim();
+	for (const vault of vaults) {
+		const marker = vault.id === expected ? "  <- SYNCH_VAULT_ID" : "";
+		process.stdout.write(`${vault.id}  ${JSON.stringify(vault.name)}  created ${vault.createdAt}${marker}\n`);
+	}
+}
+
+function fail(message) {
+	process.stderr.write(`${message}\n`);
+	process.exit(1);
+}
