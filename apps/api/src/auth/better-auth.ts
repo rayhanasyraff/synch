@@ -39,6 +39,8 @@ export type AuthFeatureConfig = {
 	googleClientSecret?: string;
 	githubClientId?: string;
 	githubClientSecret?: string;
+	/** Proxy-set client IP header; unset keeps Better Auth's default resolution. */
+	clientIpHeader?: string;
 };
 
 export type AuthPlugin = BetterAuthPlugin;
@@ -75,6 +77,9 @@ export function createBetterAuth(db: AppDb, config: BetterAuthConfig) {
 				requireLocalEmailVerified: config.emailVerification === "required",
 			},
 		},
+		...(config.clientIpHeader
+			? { advanced: { ipAddress: { ipAddressHeaders: [config.clientIpHeader] } } }
+			: {}),
 		baseURL: config.baseURL,
 		secret: config.secret,
 		database: drizzleAdapter(db, {

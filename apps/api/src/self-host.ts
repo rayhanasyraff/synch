@@ -43,6 +43,7 @@ async function main(): Promise<void> {
 		githubClientSecret: config.githubClientSecret,
 		syncTokenSecret: config.syncTokenSecret,
 		syncTokenTtlSeconds: config.syncTokenTtlSeconds,
+		clientIpHeader: config.clientIpHeader,
 		blobStorage,
 	});
 

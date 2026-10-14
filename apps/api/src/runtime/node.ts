@@ -43,6 +43,7 @@ export interface NodeRuntimeConfig {
 	githubClientSecret?: string;
 	syncTokenSecret: string;
 	syncTokenTtlSeconds?: number;
+	clientIpHeader?: string;
 	blobStorage: BlobObjectStorage;
 	/** Defaults to the drizzle/*.sql folder shared with the D1 (Cloudflare) backend. */
 	migrationsFolder?: string;
@@ -101,6 +102,7 @@ export async function createNodeRuntime(config: NodeRuntimeConfig) {
 				googleClientSecret: config.googleClientSecret,
 				githubClientId: config.githubClientId,
 				githubClientSecret: config.githubClientSecret,
+				clientIpHeader: config.clientIpHeader,
 			},
 			syncTokenSecret: config.syncTokenSecret,
 			syncTokenTtlSeconds: config.syncTokenTtlSeconds,
