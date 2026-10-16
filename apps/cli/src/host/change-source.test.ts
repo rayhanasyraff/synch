@@ -139,6 +139,48 @@ describe("NodeFsChangeSource", { timeout: 15_000 }, () => {
     expect(recordDelete).not.toHaveBeenCalled();
   });
 
+  it("ignores SilverBullet's private .silverbullet* files (e.g. .silverbullet.auth.json)", async () => {
+    const { context, recordUpsert, recordDelete, errors } = createContext();
+    source.start(context);
+    await source.whenReady();
+
+    // SilverBullet (a separate process/user when a vault is also served by it)
+    // owns these; they must never be watched or synced, and must not error.
+    fs.writeFileSync(path.join(vaultPath, ".silverbullet.auth.json"), "secret");
+    fs.writeFileSync(path.join(vaultPath, ".silverbullet.db"), "state");
+    fs.writeFileSync(path.join(vaultPath, "real.md"), "note");
+
+    await vi.waitFor(() => {
+      expect(recordUpsert).toHaveBeenCalledWith(
+        "real.md",
+        expect.anything(),
+        expect.anything(),
+      );
+    }, { timeout: 10_000 });
+    const recordedPaths = recordUpsert.mock.calls.map((call) => call[0] as unknown);
+    expect(recordedPaths).toEqual(["real.md"]);
+    expect(recordDelete).not.toHaveBeenCalled();
+    expect(errors).toEqual([]);
+  });
+
+  it("still syncs a normal note whose name merely contains 'silverbullet'", async () => {
+    // The ignore is scoped to the `.silverbullet` dot-prefix, not the word, so
+    // ordinary notes are unaffected.
+    const { context, recordUpsert } = createContext();
+    source.start(context);
+    await source.whenReady();
+
+    fs.writeFileSync(path.join(vaultPath, "silverbullet notes.md"), "keep");
+    fs.mkdirSync(path.join(vaultPath, "silverbullet"));
+    fs.writeFileSync(path.join(vaultPath, "silverbullet", "guide.md"), "keep");
+
+    await vi.waitFor(() => {
+      const recorded = recordUpsert.mock.calls.map((call) => call[0] as unknown);
+      expect(recorded).toContain("silverbullet notes.md");
+      expect(recorded).toContain("silverbullet/guide.md");
+    }, { timeout: 10_000 });
+  });
+
   it("stops delivering events after stop()", async () => {
     const { context, recordUpsert } = createContext();
     source.start(context);

@@ -111,9 +111,14 @@ export class NodeFsChangeSource implements SyncChangeSource {
     // Skip atomic-write temp files and hard-reserved trees (.synch, .git,
     // .trash, node_modules); the latter also keeps their directories out of
     // the watcher entirely, which conserves inotify watches on Linux.
+    // Also skip SilverBullet's own `.silverbullet*` state (e.g.
+    // .silverbullet.auth.json): it is never synced, and when a vault is also
+    // served by SilverBullet under a separate OS user that file can be
+    // unreadable to this process, so adding a watch on it only fails (EACCES).
     return (
       relativePath.includes(VAULT_TMP_FILE_MARKER) ||
-      isNeverSyncReservedPath(relativePath)
+      isNeverSyncReservedPath(relativePath) ||
+      isSilverBulletReservedPath(relativePath)
     );
   }
 
@@ -211,4 +216,17 @@ export class NodeFsChangeSource implements SyncChangeSource {
       this.deps.requestReconcile?.();
     }, this.deps.reconcileDebounceMs ?? DEFAULT_RECONCILE_DEBOUNCE_MS);
   }
+}
+
+/**
+ * SilverBullet keeps its private state in `.silverbullet*` entries at the space
+ * root (for example the 0600 session-signing secret `.silverbullet.auth.json`).
+ * These are dot-paths and are never synced; this only stops the watcher from
+ * trying to place a watch on them. Matched on any path segment so a future
+ * nested name is covered too.
+ */
+function isSilverBulletReservedPath(vaultRelativePath: string): boolean {
+  return vaultRelativePath
+    .split("/")
+    .some((segment) => segment.startsWith(".silverbullet"));
 }

@@ -214,12 +214,11 @@ public networking is off. Deploy once; the logs show `Maintenance mode`.
 - **Expired login** (logs repeat `sync failed`): in maintenance mode run
   `synch login`, then restart. Edits made in SilverBullet meanwhile were kept
   locally as pending changes and upload after the restart.
-- **Expected once per start:** `sync failed (sync_event_handling): EACCES:
-  permission denied, watch '/data/space/.silverbullet.auth.json'`. The CLI's
-  file watcher tries to watch SilverBullet's private session-signing secret,
-  which the isolation deliberately keeps unreadable to `synch`. The file is
-  never synced, the CLI rescans once, and nothing else is affected. Repeated
-  `sync failed` lines for anything else need attention.
+- **`sync failed` lines need attention.** The CLI's file watcher ignores
+  SilverBullet's private `.silverbullet*` state (including the 0600
+  `.silverbullet.auth.json` it cannot read), so that no longer produces a
+  spurious `EACCES` on startup. Any `sync failed` line now reflects a real
+  problem (see API outage below).
 - **API outage at startup**: if the Synch API is unreachable or failing when
   the service starts, `synch watch` exits with **"The stored session was
   rejected. Run `synch login` again."** even though the login is fine (the CLI
